@@ -57,7 +57,7 @@ Download two things:
 * The [CD image from archive.org](https://archive.org/details/orly1996)
 * The patch source code:
   * Developers: `git clone https://github.com/matthewbloch/orlys-draw-a-story-fixes.git`
-  * Everyone else: (Download link)[https://github.com/matthewbloch/orlys-draw-a-story-fixes/archive/refs/heads/main.zip]
+  * Everyone else: [Download link](https://github.com/matthewbloch/orlys-draw-a-story-fixes/archive/refs/heads/main.zip)
 
 If you're not a developer who uses PowerShell regularly, you'll need to:
 * Open Windows Settings and enable "Enable local Powershell scripts to run
