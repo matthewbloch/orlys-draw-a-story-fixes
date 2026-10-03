@@ -30,10 +30,7 @@ jobs:
       run: ./Build.ps1
 
     - name: Download original Orly CD from archive.org
-      uses: suisei-cn/actions-download-file
-      with:
-        url: https://archive.org/download/orly1996/ORLY.iso
-        target: .
+      run: $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest https://archive.org/download/orly1996/ORLY.iso -OutFile ORLY.iso
 
     - name: Build a release
       run: ./Repack.ps1 -ISO ORLY.ISO
