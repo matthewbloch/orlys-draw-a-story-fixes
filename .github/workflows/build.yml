@@ -1,0 +1,48 @@
+name: Build new Orly installer
+
+on:
+  # any tag assumed to mean "ready to release"
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    environment: production
+    runs-on: windows-latest
+
+    steps:
+    - name: Fix PSGallery
+      shell: pwsh
+      run: |
+        if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+        }
+        Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Force
+
+    - name: Checkout Repository
+      uses: actions/checkout@v6
+
+    - name: Install the build tools and build the DLL
+      run: ./Build.ps1
+
+    - name: Download original Orly CD from archive.org
+      uses: suisei-cn/actions-download-file
+      with:
+        url: https://archive.org/download/orly1996/ORLY.iso
+        target: .
+
+    - name: Build a release
+      run: ./Repack.ps1 -ISO ORLY.ISO
+
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        automatic_release_tag: "latest"
+        title: "Automatic build"
+        files: |
+          tmp/Orly's Draw-A-Story.exe
+          tmp/Orly's Draw-A-Story

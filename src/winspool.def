@@ -1,0 +1,7 @@
+; Exports of orlyfix built as winspool.dll: the three printing functions ORLY32.EXE
+; imports from WINSPOOL.dll, passed on to Windows' real winspool.drv (see orlyfix.c).
+LIBRARY winspool.dll
+EXPORTS
+    OpenPrinterA        = Proxy_OpenPrinterA@12
+    DocumentPropertiesA = Proxy_DocumentPropertiesA@24
+    ClosePrinter        = Proxy_ClosePrinter@4
