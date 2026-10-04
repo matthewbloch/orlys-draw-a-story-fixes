@@ -34,11 +34,19 @@ jobs:
     - name: Build a release
       run: ./Repack.ps1 -ISO ORLY.ISO
 
+    - name: Zip the installed directory
+      id: zip
+      run: |
+        $version = ((Get-ChildItem '.\tmp\*.exe').Name -split "[.-]")[-4..-2] -join "."
+        tar -c -a -f "tmp\Orly's Draw-A-Story-$version.zip" -C tmp *Draw-A-Story
+        "version=$version" >> $env:GITHUB_OUTPUT
+
     - uses: "marvinpinto/action-automatic-releases@latest"
       with:
         repo_token: "${{ secrets.GITHUB_TOKEN }}"
         automatic_release_tag: "latest"
-        title: "Automatic build"
+        prerelease: false
+        title: "${{ steps.zip.outputs.version }}"
         files: |
-          tmp/Orly's Draw-A-Story.exe
-          tmp/Orly's Draw-A-Story
+          tmp/*.exe
+          tmp/*.zip
