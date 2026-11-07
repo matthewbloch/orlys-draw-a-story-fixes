@@ -11,6 +11,7 @@
  *   BYTES_<name>    instruction bytes, as an initializer list: what is expected or written
  *   OP_<name>       x86 opcode bytes that orlyfix builds instructions from
  *   CODE_<name>     game code referred to in comments, recorded here for reference
+ *   TAG_<name>      a value the engine writes into its own objects to identify them
  */
 #pragma once
 
@@ -29,6 +30,9 @@
 #define FN_RTL_MEMCPY        0x48cde0u      /* void *memcpy(void *, const void *, size_t), cdecl */
 #define FN_RTL_PRINT_ERROR   0x492970u      /* prints a runtime error message, cdecl(const char *) */
 #define FN_RTL_EXIT          0x492b50u      /* exit(int), cdecl */
+
+/* ---- game functions (engine OS worker) ---- */
+#define FN_SIGNAL_DONE       0x4869a9u      /* stdcall(void *done): signals an engine wait object */
 
 /* ---- return addresses ---- */
 #define RET_MAIN_LOOP_PEEK   0x4635acu      /* after the main loop's PeekMessageA call (the loop
@@ -64,9 +68,39 @@
 #define CODE_SAVED_DRAWING_LOAD  0x4187f2u  /* engine task that loads a saved drawing */
 #define CODE_FREE_SAVED_FILES    0x417350u  /* frees VAR_SAVED_FILES and its lists */
 #define CODE_MENU_LEAVE_SCREEN   0x41f88fu  /* menu code that calls CODE_FREE_SAVED_FILES */
-#define CODE_FILE_WORKER         0x48526du  /* engine file worker thread (THREAD_PRIORITY_HIGHEST) */
 #define CODE_CHANGE_DISPLAY      0x47e954u  /* wrapper: ChangeDisplaySettingsA via GetProcAddress */
 #define CODE_ENUM_DISPLAY        0x47e9e9u  /* wrapper: EnumDisplaySettingsA via GetProcAddress */
 #define CODE_DIRECTDRAW_SETUP    0x47a1e9u  /* DirectDraw set-up: DirectDrawCreate via GetProcAddress */
 #define CODE_PALETTE_MODE        0x47eab4u  /* sets system palette use, system colours, broadcasts */
+#define CODE_FILE_WORKER         0x48526du  /* the engine's OS worker thread function (started with
+                                               CreateThread(obj, &obj->threadId); replaced) */
+#define CODE_ENGINE_POST         0x48546eu  /* posts a wake-up from another thread to the engine:
+                                               runs it at once if the scheduler count is 0,
+                                               else queues it (single-CPU-safe only) */
+#define CODE_ENGINE_DRAIN        0x485390u  /* leaves the scheduler's section, running queued
+                                               wake-ups */
+#define CODE_TASK_RELEASE        0x487229u  /* unlinks a waiting task from a wait object and
+                                               records the result: the whole of a wake-up */
 
+/* ---- the engine's OS worker ---- */
+/* Tags in every engine wait object ("done" points at one): the engine's signal routine checks
+ * both before using an object, and so does orlyfix before treating a thread as the worker. */
+#define TAG_SYNC                 0x434e5953u  /* 'SYNC' at +0x04 */
+#define TAG_EVNT                 0x544e5645u  /* 'EVNT' at +0x08 */
+
+/* The object a worker thread serves (its CreateThread argument). A task hands over a request
+ * by filling in state, fn and arg, setting `wake`, and waiting on `done`. */
+typedef struct {
+    HANDLE thread;                          /* +0x00 the worker thread */
+    DWORD threadId;                         /* +0x04 */
+    HANDLE wake;                            /* +0x08 event: a request is ready */
+    void *done;                             /* +0x0C engine wait object the requesting task waits on */
+    volatile DWORD state;                   /* +0x10 request state (the requesting task) */
+    void (WINAPI *volatile fn)(void *);     /* +0x14 request function, stdcall; NULL = shut down */
+    void *volatile arg;                     /* +0x18 its argument */
+} ENGINE_WORKER;
+_Static_assert(__builtin_offsetof(ENGINE_WORKER, wake) == 0x08, "ENGINE_WORKER layout");
+_Static_assert(__builtin_offsetof(ENGINE_WORKER, done) == 0x0C, "ENGINE_WORKER layout");
+_Static_assert(__builtin_offsetof(ENGINE_WORKER, state) == 0x10, "ENGINE_WORKER layout");
+_Static_assert(__builtin_offsetof(ENGINE_WORKER, fn) == 0x14, "ENGINE_WORKER layout");
+_Static_assert(__builtin_offsetof(ENGINE_WORKER, arg) == 0x18, "ENGINE_WORKER layout");

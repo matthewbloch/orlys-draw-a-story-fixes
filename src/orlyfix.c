@@ -321,6 +321,84 @@ static void patch_saved_name_copy(void)
     patch_bytes("saved drawing name copy", PATCH_SAVED_NAME_COPY, expect, repl, REL32_INSN_SIZE);
 }
 
+/* ---- The engine's OS worker thread (CODE_FILE_WORKER) runs a request, signals "done", then
+ * clears the request. With more than one core the waiting task can resume at "done" and post
+ * its next request before the clear, which then erases it; the worker wakes to no request,
+ * takes that as "shut down" and exits, and the game waits forever (seen when saving, and on
+ * macOS, where one-core pinning has no effect). The worker is replaced by the same loop with
+ * the request cleared before "done". The worker is recognised by the thread's argument, not by
+ * code: only it passes its own object + 4 for the thread ID, and its "done" object carries the
+ * engine's TAG_SYNC/TAG_EVNT tags. Anything else is started unchanged.
+ *
+ * "Done" itself crosses threads unsafely too: the engine posts it (CODE_ENGINE_POST) by reading
+ * the main thread's scheduler count without a lock and re-reading counters after `lock inc`,
+ * so on several cores a wake-up can be lost and the waiting task spins forever (seen on macOS
+ * when starting a story). On one CPU this high-priority thread always ran the post to the end
+ * before the main thread ran again, so that is what signal_done_alone() recreates: it pauses
+ * the engine's thread for the post. The wake-up it runs only edits the engine's task lists
+ * (CODE_TASK_RELEASE) - no Windows calls, no allocation - so the pause can't deadlock. ---- */
+static HANDLE engineThread;                 /* the thread that runs the engine (and its tasks) */
+
+static void signal_done_alone(void *done)
+{
+    void (WINAPI *signal_done)(void *) = (void (WINAPI *)(void *))FN_SIGNAL_DONE;
+    CONTEXT ctx;
+    ctx.ContextFlags = CONTEXT_CONTROL;
+    BOOL paused = engineThread && SuspendThread(engineThread) != (DWORD)-1;
+    if (paused) GetThreadContext(engineThread, &ctx);   /* returns once it has really stopped */
+    signal_done(done);
+    if (paused) ResumeThread(engineThread);
+}
+
+static DWORD WINAPI file_worker(LPVOID p)
+{
+    ENGINE_WORKER *w = p;
+    while (WaitForSingleObject(w->wake, INFINITE) == WAIT_OBJECT_0 && w->fn) {
+        w->fn(w->arg);
+        w->state = 0;                       /* clear the request... */
+        w->fn = NULL;
+        signal_done_alone(w->done);         /* ...before the waiting task can resume */
+    }
+    signal_done_alone(w->done);             /* the engine's shutdown handshake, as before */
+    return 0;
+}
+
+static BOOL readable(const void *p, SIZE_T n)
+{
+    MEMORY_BASIC_INFORMATION m;
+    if (!p || !VirtualQuery(p, &m, sizeof m) || m.State != MEM_COMMIT ||
+        (m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return FALSE;
+    return (const BYTE *)p + n <= (const BYTE *)m.BaseAddress + m.RegionSize;
+}
+
+/* Is this CreateThread call the engine starting a worker? */
+static BOOL is_engine_worker(LPVOID arg, LPDWORD id)
+{
+    ENGINE_WORKER *w = arg;
+    DWORD flags;
+    if (!readable(w, sizeof *w) || id != &w->threadId) return FALSE;
+    if (!w->wake || !GetHandleInformation(w->wake, &flags)) return FALSE;
+    const DWORD *done = w->done;
+    return readable(done, 3 * sizeof *done) && done[1] == TAG_SYNC && done[2] == TAG_EVNT;
+}
+
+HANDLE WINAPI My_CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stack, LPTHREAD_START_ROUTINE start,
+                              LPVOID arg, DWORD flags, LPDWORD id)
+{
+    if (is_engine_worker(arg, id)) {
+        start = file_worker;
+        if (!engineThread)                  /* the engine starts its workers from its own thread */
+            DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &engineThread,
+                            THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, 0);
+    }
+    return CreateThread(sa, stack, start, arg, flags, id);
+}
+
+static void replace_file_worker(void)
+{
+    HOOK_IMPORT(CreateThread, My_CreateThread);
+}
+
 /* ---- One CPU core, as on the PCs the game was written for. The engine's threads rely on
  * single-CPU timing: e.g. its file worker (CODE_FILE_WORKER, highest priority) signals a request
  * done before clearing it, which only works if the waiting thread can't run in between - on a
@@ -406,6 +484,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
 
     patch_task_stacks();
     patch_saved_name_copy();
+    replace_file_worker();
     use_one_cpu();
     HOOK_IMPORT(GetDiskFreeSpaceA, My_GetDiskFreeSpaceA);
     HOOK_IMPORT(GetKeyboardState,  My_GetKeyboardState);
